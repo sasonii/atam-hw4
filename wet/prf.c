@@ -25,11 +25,9 @@ Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val);
 pid_t run_target(const char *programname);
 void run_counter_debugger(pid_t child_pid);
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr);
-void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid, user_regs_struct& regs);
+void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid);
 void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function);
 void print_registers(pid_t child);
-
-struct user_regs_struct regs;
 
 /* symbol_name		- The symbol (maybe function) we need to search for.
  * exe_file_name	- The file where we search the symbol in.
@@ -399,8 +397,8 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
         }
     }
 }
-void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid, user_regs_struct& regs){
-
+void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid){
+    struct user_regs_struct regs;
     int wait_status;
 
     // breakpoint real function
@@ -425,7 +423,7 @@ void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr fu
 void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function)
 {
     int wait_status;
-    user_regs_struct& regs;
+    struct user_regs_struct regs;
     //unsigned long long func_addr;
     Elf64_Addr func_addr;
     unsigned long data, data_trap;
@@ -441,7 +439,8 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     // get actual func address
     func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
 
-    break_start_func(data, data_trap, func_addr, child_pid, regs);
+    break_start_func(data, data_trap, func_addr, child_pid);
+    ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
 
     //breakpoint end function
     Elf64_Addr return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
@@ -471,6 +470,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
         printf("PRF:: run %d returned with %d\n", call_counter++, (int)regs.rdx);
 
         break_start_func(data, data_trap, func_addr, child_pid);
+        ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
 
         //breakpoint end function
         ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
