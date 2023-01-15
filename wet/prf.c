@@ -312,35 +312,115 @@ pid_t run_target(const char* programname)
     }
 }
 
-void run_breakpoint_debugger(pid_t child_pid, unsigned long addr, bool is_shared_function)
+void run_counter_debugger(pid_t child_pid)
 {
     int wait_status;
-    struct user_regs_struct regs;
+    int icounter = 0;
 
     /* Wait for child to stop on its first instruction */
     wait(&wait_status);
+    while (WIFSTOPPED(wait_status)) {
+        icounter++;
 
+        /* Make the child execute another instruction */
+        if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
+            perror("ptrace");
+            return;
+        }
+
+        /* Wait for child to stop on its next instruction */
+        wait(&wait_status);
+    }
+
+    printf("DBG: the child executed %d instructions\n", icounter);
+}
+
+void run_breakpoint_debugger(pid_t child_pid, unsigned long long addr, bool is_shared_function)
+{
+    int wait_status;
+    struct user_regs_struct regs;
+    unsigned long long got_addr_ptr_new;
+
+    /* Wait for child to stop on its first instruction */
+    wait(&wait_status);
+    
     /* Look at the word at the address we're interested in */
-    unsigned long data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
-    printf("DBG: Original data at 0x%x: 0x%x\n", addr, data);
-
+    unsigned long long got_addr_ptr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
+    printf("DBG: got_addr_ptr at 0x%llx: 0x%llx\n", addr, got_addr_ptr);
+    
+    unsigned long long data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr, NULL);
+    printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr, data);
+    
+    
     /* Write the trap instruction 'int 3' into the address */
     unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)addr, (void*)data_trap);
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr, (void*)data_trap);
 
     /* Let the child run to the breakpoint and wait for it to reach it */
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-
+    
     wait(&wait_status);
+    
     /* See where the child is now */
     ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
-    printf("DBG: Child stopped at RIP = 0x%x\n", regs.rip);
+    printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
 
-    /* Remove the breakpoint by restoring the previous data and set rdx = 5 */
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)addr, (void*)data);
+    /* Remove the breakpoint by restoring the previous data */
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr, (void*)data);
     regs.rip -= 1;
-    regs.rdx = 5;
     ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+    
+    while (WIFSTOPPED(wait_status)) {
+        got_addr_ptr_new = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
+    	printf("DBG: got_addr_ptr_new at 0x%llx: 0x%llx\n", addr, got_addr_ptr_new);
+    	
+    	if(got_addr_ptr_new != got_addr_ptr){
+    	    // breakpoint real function	
+    	    data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr_new, NULL);
+	    printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr_new, data);
+    	    data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+    	    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data_trap);
+    	    break;
+    	}
+
+        /* Make the child execute another instruction */
+        if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
+            perror("ptrace");
+            return;
+        }
+
+        /* Wait for child to stop on its next instruction */
+        wait(&wait_status);
+    }
+    
+    /* Let the child run to the breakpoint and wait for it to reach it */
+    ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+    wait(&wait_status);
+    ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data);
+    regs.rip -= 1;
+    ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+    
+    //breakpoint end function
+    Elf64_Addr return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
+    unsigned long return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
+    unsigned long return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+    ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
+    printf("DBG: ret addr : 0x%lx\n", return_address);
+    
+    ptrace(PTRACE_CONT, child_pid, NULL, NULL);    
+    wait(&wait_status);
+    
+    /* See where the child is now */
+    ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
+    printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
+
+    /* Remove the breakpoint by restoring the previous data */
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
+    regs.rip -= 1;
+    ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+    
+    printf("PRF:: run #<call_counter> returned with %d\n", (int)regs.rax);
 
     /* The child can continue running now */
     ptrace(PTRACE_CONT, child_pid, 0, 0);
@@ -355,7 +435,9 @@ void run_breakpoint_debugger(pid_t child_pid, unsigned long addr, bool is_shared
 
 int main(int argc, char *const argv[]) {
     int err = 0;
-    unsigned long addr = find_symbol(argv[1] ,argv[2], &err);
+    //unsigned long addr = find_symbol(argv[1] ,argv[2], &err);
+    unsigned long addr = find_symbol("addSoVar", "main.out", &err);
+    
     //printf("%s will be loaded to 0x%lx\n", argv[1], addr);
     if (err == -3){
         printf("PRF:: %s not an executable! :(\n", argv[2]);
@@ -371,7 +453,8 @@ int main(int argc, char *const argv[]) {
     }
 
     pid_t child_pid;
-    child_pid = run_target(argv[1]);
+    //child_pid = run_target(argv[2]);"main.out"
+    child_pid = run_target("main.out");
 
     // shared object function
     if (err == -4) {
