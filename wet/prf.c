@@ -347,11 +347,11 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
     // plt address stored in got
     Elf64_Addr got_addr_ptr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
-    printf("DBG: got_addr_ptr at 0x%llx: 0x%lx\n", addr, got_addr_ptr);
+    printf("DBG: got_addr_ptr at 0x%lx: 0x%lx\n", addr, got_addr_ptr);
 
     // machine code of plt
     Elf64_Addr data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr, NULL);
-    printf("DBG: Original data at 0x%llx: 0x%lx\n", got_addr_ptr, data);
+    printf("DBG: Original data at 0x%lx: 0x%lx\n", got_addr_ptr, data);
 
 
     // breakpoint plt in order to examine changes in got
@@ -386,7 +386,7 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
         /* Make the child execute another instruction */
         if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
             perror("ptrace");
-            return;
+            exit(0);
         }
 
         /* Wait for child to stop on its next instruction */
@@ -401,7 +401,9 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
 {
     int wait_status;
     struct user_regs_struct regs;
-    unsigned long long got_addr_ptr_new;
+    //unsigned long long func_addr;
+    Elf64_Addr func_addr;
+    unsigned long data, data_trap;
 
     /* Wait for child to stop on its first instruction */
     wait(&wait_status);
@@ -413,10 +415,10 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
 
     // breakpoint real function
-    data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr_new, NULL);
-    printf("DBG: Original data at 0x%lx: 0x%llx\n", got_addr_ptr_new, data);
+    data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)func_addr, NULL);
+    printf("DBG: Original data at 0x%lx: 0x%llx\n", func_addr, data);
     data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data_trap);
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
 
     /* Let the child run to the breakpoint and wait for it to reach it */
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
@@ -426,7 +428,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     }
 
     ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data);
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data);
     regs.rip -= 1;
     ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
     
