@@ -23,7 +23,6 @@
 
 Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val);
 pid_t run_target(const char *programname);
-void run_counter_debugger(pid_t child_pid);
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr);
 void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid);
 void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function);
@@ -38,6 +37,7 @@ void print_registers(pid_t child);
  * 			- If -4: The symbol was found, it is global, but it is not defined in the executable.
  * return value		- The address which the symbol_name will be loaded to, if the symbol was found and is global.
  */
+
 Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val) {
     //this function will read an ELF file and find the address of a symbol in it.
     // if the symbol is not found, we will put -1 in error_val.
@@ -318,28 +318,7 @@ pid_t run_target(const char* programname)
     }
 }
 
-void run_counter_debugger(pid_t child_pid)
-{
-    int wait_status;
-    int icounter = 0;
 
-    /* Wait for child to stop on its first instruction */
-    wait(&wait_status);
-    while (WIFSTOPPED(wait_status)) {
-        icounter++;
-
-        /* Make the child execute another instruction */
-        if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
-            perror("ptrace");
-            return;
-        }
-
-        /* Wait for child to stop on its next instruction */
-        wait(&wait_status);
-    }
-
-    printf("DBG: the child executed %d instructions\n", icounter);
-}
 
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
     int wait_status;
@@ -348,11 +327,11 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
     // plt address stored in got
     Elf64_Addr got_addr_ptr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
-    printf("DBG: got_addr_ptr at 0x%lx: 0x%lx\n", addr, got_addr_ptr);
+    //printf("DBG: got_addr_ptr at 0x%lx: 0x%lx\n", addr, got_addr_ptr);
 
     // machine code of plt
     Elf64_Addr data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr, NULL);
-    printf("DBG: Original data at 0x%lx: 0x%lx\n", got_addr_ptr, data);
+    //printf("DBG: Original data at 0x%lx: 0x%lx\n", got_addr_ptr, data);
 
 
     // breakpoint plt in order to examine changes in got
@@ -368,7 +347,7 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
     /* See where the child is now */
     ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
-    printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
+    //printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
 
     /* Remove plt's breakpoint by restoring the previous data */
     ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr, (void*)data);
@@ -403,7 +382,7 @@ void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr fu
 
     // breakpoint real function
     data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)func_addr, NULL);
-    printf("DBG: Original data at 0x%lx: 0x%lx\n", func_addr, data);
+    //printf("DBG: Original data at 0x%lx: 0x%lx\n", func_addr, data);
     data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
 
@@ -447,7 +426,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     unsigned long return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
     unsigned long return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
-    printf("DBG: ret addr : 0x%lx\n", return_address);
+    //printf("DBG: ret addr : 0x%lx\n", return_address);
     //diff_func_from_ret++;
 
     while(true){
@@ -459,14 +438,14 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
 
         /* See where the child is now */
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
-        printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
+        //printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
 
         /* Remove the breakpoint by restoring the previous data */
         ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
         regs.rip -= 1;
         ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
 
-        print_registers(child_pid);
+        //DEBUG:: print_registers(child_pid);
         printf("PRF:: run %d returned with %d\n", call_counter++, (int)regs.rdx);
 
         break_start_func(data, data_trap, func_addr, child_pid);
@@ -515,8 +494,8 @@ void print_registers(pid_t child) {
 
 int main(int argc, char *const argv[]) {
     int err = 0;
-    //unsigned long addr = find_symbol(argv[1] ,argv[2], &err);
-    Elf64_Addr addr = find_symbol("addSoVar", "main.out", &err);
+    Elf64_Addr addr = find_symbol(argv[1] ,argv[2], &err);
+    //Elf64_Addr addr = find_symbol("addSoVar", "main.out", &err);
     
     //printf("%s will be loaded to 0x%lx\n", argv[1], addr);
     if (err == -3){
@@ -533,8 +512,8 @@ int main(int argc, char *const argv[]) {
     }
 
     pid_t child_pid;
-    //child_pid = run_target(argv[2]);"main.out"
-    child_pid = run_target("main.out");
+    child_pid = run_target(argv[2]);
+    //child_pid = run_target("main.out");
 
     // shared object function
     if (err == -4) {
