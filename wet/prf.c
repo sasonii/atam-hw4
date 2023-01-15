@@ -356,6 +356,9 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
     /* Let the child run to the breakpoint and wait for it to reach it */
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
     wait(&wait_status);
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
 
     /* See where the child is now */
     ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
@@ -371,11 +374,7 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
         //printf("DBG: got_addr_ptr_new at 0x%llx: 0x%llx\n", addr, got_addr_ptr_new);
 
         if(got_addr_ptr_new != got_addr_ptr){
-            // breakpoint real function
-            data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr_new, NULL);
-            //printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr_new, data);
-            data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-            ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data_trap);
+
             return got_addr_ptr_new;
         }
 
@@ -387,6 +386,9 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
         /* Wait for child to stop on its next instruction */
         wait(&wait_status);
+        if(WIFEXITED(wait_status)){
+            exit(0);
+        }
     }
 }
 
@@ -398,14 +400,26 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
 
     /* Wait for child to stop on its first instruction */
     wait(&wait_status);
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
 
     // get actual func address
     func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
 
+    // breakpoint real function
+    data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr_new, NULL);
+    printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr_new, data);
+    data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data_trap);
 
     /* Let the child run to the breakpoint and wait for it to reach it */
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
     wait(&wait_status);
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
+
     ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
     ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data);
     regs.rip -= 1;
@@ -420,7 +434,10 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);    
     wait(&wait_status);
-    
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
+
     /* See where the child is now */
     ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
     printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
@@ -429,18 +446,41 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
     regs.rip -= 1;
     ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
-    
+
+    print_registers(child_pid);
     printf("PRF:: run #<call_counter> returned with %d\n", (int)regs.rax);
 
     /* The child can continue running now */
     ptrace(PTRACE_CONT, child_pid, 0, 0);
-
     wait(&wait_status);
     if (WIFEXITED(wait_status)) {
         printf("DBG: Child exited\n");
     } else {
         printf("DBG: Unexpected signal\n");
     }
+}
+
+void print_registers(pid_t child) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, child, NULL, &regs);
+    printf("rax: %llu\n", regs.rax);
+    printf("rbx: %llu\n", regs.rbx);
+    printf("rcx: %llu\n", regs.rcx);
+    printf("rdx: %llu\n", regs.rdx);
+    printf("rsi: %llu\n", regs.rsi);
+    printf("rdi: %llu\n", regs.rdi);
+    printf("rbp: %llu\n", regs.rbp);
+    printf("rsp: %llu\n", regs.rsp);
+    printf("r8: %llu\n", regs.r8);
+    printf("r9: %llu\n", regs.r9);
+    printf("r10: %llu\n", regs.r10);
+    printf("r11: %llu\n", regs.r11);
+    printf("r12: %llu\n", regs.r12);
+    printf("r13: %llu\n", regs.r13);
+    printf("r14: %llu\n", regs.r14);
+    printf("r15: %llu\n", regs.r15);
+    printf("rip: %llu\n", regs.rip);
+    printf("eflags: %llu\n", regs.eflags);
 }
 
 int main(int argc, char *const argv[]) {
