@@ -21,6 +21,7 @@
 #define	ET_DYN	3	//Shared object file 
 #define	ET_CORE	4	//Core file 
 
+pid_t run_target(const char *programname);
 
 /* symbol_name		- The symbol (maybe function) we need to search for.
  * exe_file_name	- The file where we search the symbol in.
@@ -284,6 +285,31 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
         *error_val = -4;
     }
     return symbol_address;
+}
+
+pid_t run_target(const char* programname)
+{
+    pid_t pid;
+
+    pid = fork();
+
+    if (pid > 0) {
+        return pid;
+
+    } else if (pid == 0) {
+        /* Allow tracing of this process */
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
+            perror("ptrace");
+            exit(1);
+        }
+        /* Replace this process's image with the given program */
+        execl(programname, programname, NULL);
+
+    } else {
+        // fork error
+        perror("fork");
+        exit(1);
+    }
 }
 
 void run_breakpoint_debugger(pid_t child_pid, unsigned long addr, bool is_shared_function)
