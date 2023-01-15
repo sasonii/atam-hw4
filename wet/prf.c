@@ -21,7 +21,12 @@
 #define	ET_DYN	3	//Shared object file 
 #define	ET_CORE	4	//Core file 
 
+Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val);
 pid_t run_target(const char *programname);
+void run_counter_debugger(pid_t child_pid);
+Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr);
+void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function);
+void print_registers(pid_t child);
 
 /* symbol_name		- The symbol (maybe function) we need to search for.
  * exe_file_name	- The file where we search the symbol in.
@@ -342,11 +347,11 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
     // plt address stored in got
     Elf64_Addr got_addr_ptr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)addr, NULL);
-    printf("DBG: got_addr_ptr at 0x%llx: 0x%llx\n", addr, got_addr_ptr);
+    printf("DBG: got_addr_ptr at 0x%llx: 0x%lx\n", addr, got_addr_ptr);
 
     // machine code of plt
     Elf64_Addr data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr, NULL);
-    printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr, data);
+    printf("DBG: Original data at 0x%llx: 0x%lx\n", got_addr_ptr, data);
 
 
     // breakpoint plt in order to examine changes in got
@@ -409,7 +414,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
 
     // breakpoint real function
     data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_addr_ptr_new, NULL);
-    printf("DBG: Original data at 0x%llx: 0x%llx\n", got_addr_ptr_new, data);
+    printf("DBG: Original data at 0x%lx: 0x%llx\n", got_addr_ptr_new, data);
     data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, (void*)got_addr_ptr_new, (void*)data_trap);
 
