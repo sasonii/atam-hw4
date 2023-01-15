@@ -22,7 +22,7 @@
 #define	ET_CORE	4	//Core file 
 
 Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val);
-pid_t run_target(const char *programname);
+pid_t run_target(const char* func, char *const argv[]);
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr);
 void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid);
 void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function);
@@ -293,31 +293,24 @@ Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val) {
     return symbol_address;
 }
 
-pid_t run_target(const char* programname)
-{
-    pid_t pid;
+pid_t run_target(const char* func, char *const argv[]){
+    pid_t pid = fork();
 
-    pid = fork();
-
-    if (pid > 0) {
+    if(pid > 0){
         return pid;
-
-    } else if (pid == 0) {
-        /* Allow tracing of this process */
+    }
+    else if (pid == 0) {
         if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
             perror("ptrace");
             exit(1);
         }
-        /* Replace this process's image with the given program */
-        execl(programname, programname, NULL);
-
-    } else {
-        // fork error
+        execv(func, (argv + 2));
+    }
+    else {
         perror("fork");
         exit(1);
     }
 }
-
 
 
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
@@ -366,7 +359,7 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
         /* Make the child execute another instruction */
         if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
             perror("ptrace");
-            exit(0);
+            exit(1);
         }
 
         /* Wait for child to stop on its next instruction */
@@ -511,8 +504,7 @@ int main(int argc, char *const argv[]) {
         return 0;
     }
 
-    pid_t child_pid;
-    child_pid = run_target(argv[2]);
+    pid_t child_pid = run_target(argv[2], argv);
     //child_pid = run_target("main.out");
 
     // shared object function
