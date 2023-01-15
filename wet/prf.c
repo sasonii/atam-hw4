@@ -420,7 +420,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     unsigned long return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
     //printf("DBG: ret addr : 0x%lx\n", return_address);
-    //diff_func_from_ret++;
+    ///diff_func_from_ret++;
 
     while(true){
         ptrace(PTRACE_CONT, child_pid, NULL, NULL);
