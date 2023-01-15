@@ -25,6 +25,7 @@ Elf64_Addr find_symbol(char* symbol_name, char* exe_file_name, int* error_val);
 pid_t run_target(const char *programname);
 void run_counter_debugger(pid_t child_pid);
 Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr);
+void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid);
 void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function);
 void print_registers(pid_t child);
 
@@ -396,27 +397,13 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
         }
     }
 }
-
-void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function)
-{
-    int wait_status;
+void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid){
     struct user_regs_struct regs;
-    //unsigned long long func_addr;
-    Elf64_Addr func_addr;
-    unsigned long data, data_trap;
-
-    /* Wait for child to stop on its first instruction */
-    wait(&wait_status);
-    if(WIFEXITED(wait_status)){
-        exit(0);
-    }
-
-    // get actual func address
-    func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
+    int wait_status;
 
     // breakpoint real function
     data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)func_addr, NULL);
-    printf("DBG: Original data at 0x%lx: 0x%llx\n", func_addr, data);
+    printf("DBG: Original data at 0x%lx: 0x%lx\n", func_addr, data);
     data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
 
@@ -431,40 +418,71 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data);
     regs.rip -= 1;
     ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
-    
+}
+
+void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_function)
+{
+    int wait_status;
+    struct user_regs_struct regs;
+    //unsigned long long func_addr;
+    Elf64_Addr func_addr;
+    unsigned long data, data_trap;
+    int call_counter = 1;
+    //int diff_func_from_ret = 0
+
+    /* Wait for child to stop on its first instruction */
+    wait(&wait_status);
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
+
+    // get actual func address
+    func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
+
+    break_start_func(data, data_trap, func_addr, child_pid);
+
     //breakpoint end function
     Elf64_Addr return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
     unsigned long return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
     unsigned long return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
     printf("DBG: ret addr : 0x%lx\n", return_address);
-    
-    ptrace(PTRACE_CONT, child_pid, NULL, NULL);    
-    wait(&wait_status);
-    if(WIFEXITED(wait_status)){
-        exit(0);
+    //diff_func_from_ret++;
+
+    while(true){
+        ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+        wait(&wait_status);
+        if(WIFEXITED(wait_status)){
+            exit(0);
+        }
+
+        /* See where the child is now */
+        ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
+        printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
+
+        /* Remove the breakpoint by restoring the previous data */
+        ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
+        regs.rip -= 1;
+        ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+
+        print_registers(child_pid);
+        printf("PRF:: run %d returned with %d\n", call_counter++, (int)regs.rdx);
+
+        break_start_func(data, data_trap, func_addr, child_pid);
+
+        //breakpoint end function
+        ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
+
+//        /* The child can continue running now */
+//        ptrace(PTRACE_CONT, child_pid, 0, 0);
+//        wait(&wait_status);
+//        if (WIFEXITED(wait_status)) {
+//            printf("DBG: Child exited\n");
+//        } else {
+//            printf("DBG: Unexpected signal\n");
+//        }
     }
 
-    /* See where the child is now */
-    ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
-    printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
-
-    /* Remove the breakpoint by restoring the previous data */
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
-    regs.rip -= 1;
-    ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
-
-    print_registers(child_pid);
-    printf("PRF:: run #<call_counter> returned with %d\n", (int)regs.rax);
-
-    /* The child can continue running now */
-    ptrace(PTRACE_CONT, child_pid, 0, 0);
-    wait(&wait_status);
-    if (WIFEXITED(wait_status)) {
-        printf("DBG: Child exited\n");
-    } else {
-        printf("DBG: Unexpected signal\n");
-    }
 }
 
 void print_registers(pid_t child) {
