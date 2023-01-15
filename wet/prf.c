@@ -473,6 +473,9 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
 
         //breakpoint end function
+        return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
+        return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
+        return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
 
 //        /* The child can continue running now */
