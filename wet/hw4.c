@@ -421,13 +421,10 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
     //printf("DBG: ret addr : 0x%lx\n", return_address);
     ///diff_func_from_ret++;
-
-    while(true){
-        ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-        wait(&wait_status);
-        if(WIFEXITED(wait_status)){
-            exit(0);
-        }
+	ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+	wait(&wait_status);
+    while(WIFSTOPPED(wait_status)){        
+        
 
         /* See where the child is now */
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
@@ -439,7 +436,7 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
         ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
 
         //DEBUG:: print_registers(child_pid);
-        printf("PRF:: run %d returned with %d\n", call_counter++, (int)regs.rdx);
+        printf("PRF:: run #%d returned with %d\n", call_counter++, (int)regs.rax);
 
         break_start_func(data, data_trap, func_addr, child_pid);
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
@@ -449,16 +446,23 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
         return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
         return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
-
-//        /* The child can continue running now */
-//        ptrace(PTRACE_CONT, child_pid, 0, 0);
-//        wait(&wait_status);
-//        if (WIFEXITED(wait_status)) {
-//            printf("DBG: Child exited\n");
-//        } else {
-//            printf("DBG: Unexpected signal\n");
-//        }
+		
+        /* The child can continue running now */
+        ptrace(PTRACE_CONT, child_pid, 0, 0);
+        wait(&wait_status);
+        if (WIFEXITED(wait_status)) {
+            //printf("DBG: Child exited\n");
+			break;
+        } 
+		//else {
+            //printf("DBG: Unexpected signal\n");
+		
+        //}
     }
+	
+	if(WIFEXITED(wait_status)){
+            exit(0);
+        }
 
 }
 
