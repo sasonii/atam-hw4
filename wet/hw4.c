@@ -334,9 +334,9 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
     /* Let the child run to the breakpoint and wait for it to reach it */
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
     wait(&wait_status);
-    if(WIFEXITED(wait_status)){
-        exit(0);
-    }
+//    if(WIFEXITED(wait_status)){
+//        exit(0);
+//    }
 
     /* See where the child is now */
     ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
@@ -364,9 +364,9 @@ Elf64_Addr get_shared_func_addr(pid_t child_pid, Elf64_Addr addr){
 
         /* Wait for child to stop on its next instruction */
         wait(&wait_status);
-        if(WIFEXITED(wait_status)){
-            exit(0);
-        }
+//        if(WIFEXITED(wait_status)){
+//            exit(0);
+//        }
     }
 }
 void break_start_func(unsigned long data, unsigned long data_trap, Elf64_Addr func_addr, pid_t child_pid){
@@ -400,13 +400,10 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     Elf64_Addr func_addr;
     unsigned long data, data_trap;
     int call_counter = 1;
-    //int diff_func_from_ret = 0
+    int diff_func_from_ret = 0;
 
     /* Wait for child to stop on its first instruction */
     wait(&wait_status);
-    if(WIFEXITED(wait_status)){
-        exit(0);
-    }
 
     // get actual func address
     func_addr = is_shared_function ? get_shared_func_addr(child_pid, addr) : addr;
@@ -419,50 +416,110 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, bool is_shared_fu
     unsigned long return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
     unsigned long return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
     ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
-    //printf("DBG: ret addr : 0x%lx\n", return_address);
-    ///diff_func_from_ret++;
-	ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-	wait(&wait_status);
-    while(WIFSTOPPED(wait_status)){        
-        
 
+    // break start func again (for recursion)
+    if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
+        perror("ptrace");
+        exit(1);
+    }
+    wait(&wait_status);
+
+    data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)func_addr, NULL);
+    data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+    ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
+    diff_func_from_ret++;
+
+    //printf("DBG: ret addr : 0x%lx\n", return_address);
+    ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+    wait(&wait_status);
+
+    while(true){
         /* See where the child is now */
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
         //printf("DBG: Child stopped at RIP = 0x%llx\n", regs.rip);
+        if(func_addr == regs.rip - 1){
+            ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data);
+            regs.rip -= 1;
+            ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+            Elf64_Addr curr_return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL);
+            if(curr_return_address == return_address && diff_func_from_ret != 0) {
+                diff_func_from_ret++;
+            }
 
-        /* Remove the breakpoint by restoring the previous data */
-        ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
-        regs.rip -= 1;
-        ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+            if(diff_func_from_ret == 0){
+                //breakpoint end function
+                return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
+                return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
+                return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+                ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
+                diff_func_from_ret++;
+            }
 
-        //DEBUG:: print_registers(child_pid);
-        printf("PRF:: run #%d returned with %d\n", call_counter++, (int)regs.rax);
+            if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
+                perror("ptrace");
+                exit(1);
+            }
+            wait(&wait_status);
 
-        break_start_func(data, data_trap, func_addr, child_pid);
-        ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
+            // breakpoint real function
+            ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
 
-        //breakpoint end function
-        return_address = ptrace(PTRACE_PEEKTEXT, child_pid, (regs.rsp), NULL); // (regs.rsp)
-        return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
-        return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-        ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
-		
+
+        }
+        else{
+            /* Remove the breakpoint by restoring the previous data */
+            ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
+            regs.rip -= 1;
+            ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+
+            if(diff_func_from_ret == 1){
+                printf("PRF:: run #%d returned with %d\n", call_counter++, (int)regs.rax);
+                diff_func_from_ret--;
+            }
+            else if (return_address == regs.rip){
+                diff_func_from_ret--;
+            }
+
+            if (ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL) < 0) {
+                perror("ptrace");
+                exit(1);
+            }
+            wait(&wait_status);
+
+            if(diff_func_from_ret != 0) {
+                //breakpoint end function
+                ptrace(PTRACE_POKETEXT, child_pid, return_address, (void *) return_data_trap);
+            }
+
+        }
+
+//        /* Remove the breakpoint by restoring the previous data */
+//        ptrace(PTRACE_POKETEXT, child_pid, (void*)return_address, (void*)return_data);
+//        regs.rip -= 1;
+//        ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
+//
+//        //print_registers(child_pid);
+//        printf("PRF:: run #%d returned with %d\n", call_counter++, (int)regs.rax);
+//
+//        break_start_func(data, data_trap, func_addr, child_pid);
+//        ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
+//
+//        //breakpoint end function
+//        return_data = ptrace(PTRACE_PEEKTEXT, child_pid, return_address, NULL);
+//        return_data_trap = (return_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+//        ptrace(PTRACE_POKETEXT, child_pid, return_address, (void*)return_data_trap);
+
         /* The child can continue running now */
         ptrace(PTRACE_CONT, child_pid, 0, 0);
         wait(&wait_status);
-        if (WIFEXITED(wait_status)) {
-            //printf("DBG: Child exited\n");
-			break;
-        } 
-		//else {
-            //printf("DBG: Unexpected signal\n");
-		
-        //}
-    }
-	
-	if(WIFEXITED(wait_status)){
+        if(WIFEXITED(wait_status)){
             exit(0);
         }
+    }
+
+    if(WIFEXITED(wait_status)){
+        exit(0);
+    }
 
 }
 
@@ -493,7 +550,7 @@ int main(int argc, char *const argv[]) {
     int err = 0;
     Elf64_Addr addr = find_symbol(argv[1] ,argv[2], &err);
     //Elf64_Addr addr = find_symbol("addSoVar", "main.out", &err);
-    
+
     //printf("%s will be loaded to 0x%lx\n", argv[1], addr);
     if (err == -3){
         printf("PRF:: %s not an executable! :(\n", argv[2]);
